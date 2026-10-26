@@ -43,6 +43,7 @@ const (
 	NodeLockAscend             = "hami.io/mutex.lock"
 	Ascend910Prefix            = "Ascend910"
 	Ascend910CType             = "Ascend910C"
+	Ascend950DTType            = "Ascend950DT"
 	Ascend910NetworkWeight     = 10
 	VNPUModeAnnotation         = "huawei.com/vnpu-mode"
 	VNPUModeHamiCore           = "hami-core"
@@ -197,6 +198,18 @@ func (dev *Devices) MutateAdmission(ctr *corev1.Container, p *corev1.Pod) (bool,
 	}
 
 	reqNum := count.Value()
+	// A5 has no supported slicing backend. Do not silently expand a partial
+	// memory request to a whole card or accept a Pod-level soft-slice override.
+	if dev.config.CommonWord == Ascend950DTType {
+		if vnpuMode != "" && vnpuMode != VNPUModeTemplate {
+			return true, fmt.Errorf("%s supports whole cards only; vNPU mode %q is not supported", dev.config.CommonWord, vnpuMode)
+		}
+		for _, resources := range []corev1.ResourceList{ctr.Resources.Limits, ctr.Resources.Requests} {
+			if mem, ok := resources[corev1.ResourceName(dev.config.ResourceMemoryName)]; ok && mem.Value() != dev.config.MemoryAllocatable {
+				return true, fmt.Errorf("%s supports whole cards only; %s must be %d MiB", dev.config.CommonWord, dev.config.ResourceMemoryName, dev.config.MemoryAllocatable)
+			}
+		}
+	}
 	if dev.config.CommonWord == Ascend910CType && dev.config.SuperPod && !isENPU {
 		if reqNum == 1 {
 			// Since the minimum allocation unit is one physical module (2 NPUs), round up the limits and requests to 2.
@@ -560,6 +573,9 @@ func (dev *Devices) GetResourceNames() device.ResourceNames {
 const hamiCorePercentBase = 100
 
 func (dev *Devices) nodeSupportsHamiCore(n *corev1.Node) bool {
+	if dev.config.CommonWord == Ascend950DTType {
+		return false
+	}
 	supported := dev.vnpuMode == VNPUModeHamiCore
 	if n != nil && n.Annotations != nil {
 		if val, ok := n.Annotations[VNPUNodeSelectorAnnotation]; ok {
@@ -570,6 +586,9 @@ func (dev *Devices) nodeSupportsHamiCore(n *corev1.Node) bool {
 }
 
 func (dev *Devices) nodeSupportsENPU(n *corev1.Node) bool {
+	if dev.config.CommonWord == Ascend950DTType {
+		return false
+	}
 	supported := dev.vnpuMode == VNPUModeENPU
 	if n != nil && n.Annotations != nil {
 		if val, ok := n.Annotations[VNPUNodeENPUAnnotation]; ok {
@@ -848,6 +867,13 @@ func (npu *Devices) Fit(devices []*device.DeviceUsage, request device.ContainerD
 	klog.InfoS("Allocating device for container request", "pod", klog.KObj(pod), "card request", k)
 	var tmpDevs map[string]device.ContainerDevices
 	tmpDevs = make(map[string]device.ContainerDevices)
+	if npu.config.CommonWord == Ascend950DTType {
+		if (k.Memreq != 0 && k.Memreq != npu.config.MemoryAllocatable) ||
+			(k.Memreq == 0 && k.MemPercentagereq != 100) || k.Coresreq != 0 {
+			return false, tmpDevs, "Ascend950DT supports whole cards only"
+		}
+		k.Memreq = npu.config.MemoryAllocatable
+	}
 	reason := make(map[string]int)
 	if k.Coresreq > 100 || k.Coresreq < 0 {
 		klog.ErrorS(nil, "core limit out of range (must be 0-100)", "pod", klog.KObj(pod), "coresreq", k.Coresreq)

@@ -4,6 +4,16 @@ This document provides detailed descriptions of all configurable values paramete
 
 Device configuration fields use `devices.<vendor>` and match the field names in `device-config.yaml`. Supply the current field paths in a values file when upgrading; the previous root-level device fields are no longer read. Supplying removed fields fails chart rendering and lists every old field with its replacement path.
 
+## A5 (Ascend950DT)
+
+Enable Ascend scheduling with `devices.ascend.enabled=true` and deploy the
+updated standalone Ascend device plugin. The default configs and extender
+resources include `huawei.com/Ascend950DT` and `huawei.com/Ascend950DT-memory`.
+Ascend950DT supports whole cards (98304 MiB / 32 AI cores each), including odd
+card counts. Omit memory or request `98304` per card; partial memory and
+hami-core/ENPU modes are rejected for this chip. See the
+[allocation example](../../examples/ascend/job-950DT.yaml).
+
 ## Upgrade to v2.11
 
 Device-specific Helm values use `devices.<vendor>`. Move your existing overrides

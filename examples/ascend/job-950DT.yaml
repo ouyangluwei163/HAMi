@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ascend950dt-job
+spec:
+  containers:
+    - name: worker
+      # Allocation smoke test. Use an A5-compatible application image for workloads.
+      image: ubuntu:22.04
+      command: ["bash", "-c", "sleep 3600"]
+      resources:
+        limits:
+          huawei.com/Ascend950DT: 3 # A5 supports odd and even whole-card counts.
+          # Optional, per-card MiB. Partial memory and soft slicing are unsupported.
+          # huawei.com/Ascend950DT-memory: 98304

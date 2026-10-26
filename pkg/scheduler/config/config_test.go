@@ -1067,3 +1067,61 @@ func TestGenerateResourceRequests_CountEdgesAcrossBackends(t *testing.T) {
 		})
 	}
 }
+
+// 内置默认配置（没挂 device-config 文件时生效）必须认得 A5 的 Ascend950DT，且只允许整卡：
+// 资源名与 chart 一致、无 core 资源名，整卡显存放行、少于整卡即被准入拒绝（无切分模板）。
+func Test_InitDefaultDevices_Ascend950DT(t *testing.T) {
+	assert.NilError(t, GlobalFlagSet().Parse([]string{"-enable-ascend=true"}))
+	t.Cleanup(func() { _ = GlobalFlagSet().Parse([]string{"-enable-ascend=false"}) })
+	InitDefaultDevices()
+
+	dev, ok := device.DevicesMap["Ascend950DT"]
+	assert.Assert(t, ok, "Ascend950DT missing from built-in default device config")
+	assert.DeepEqual(t, dev.GetResourceNames(), device.ResourceNames{
+		ResourceCountName:  "huawei.com/Ascend950DT",
+		ResourceMemoryName: "huawei.com/Ascend950DT-memory",
+	})
+
+	admit := func(mem string) error {
+		limits := corev1.ResourceList{
+			"huawei.com/Ascend950DT":        resource.MustParse("1"),
+			"huawei.com/Ascend950DT-memory": resource.MustParse(mem),
+		}
+		ctr := &corev1.Container{Resources: corev1.ResourceRequirements{Limits: limits, Requests: limits.DeepCopy()}}
+		_, err := dev.MutateAdmission(ctr, &corev1.Pod{})
+		return err
+	}
+	assert.NilError(t, admit("98304"))
+	assert.Assert(t, admit("98303") != nil, "sub-card request must be rejected: Ascend950DT has no split templates")
+}
+
+// The chart owns the scheduler config; keep its A5 entry and the extender's
+// resource list aligned with the standalone plugin's whole-card contract.
+func TestAscend950DTChartConfig(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "charts", "hami", "values.yaml"))
+	assert.NilError(t, err)
+	var values struct {
+		Devices struct {
+			Ascend struct {
+				Configs   []ascend.VNPUConfig `yaml:"configs"`
+				Resources []string            `yaml:"customresources"`
+			} `yaml:"ascend"`
+		} `yaml:"devices"`
+	}
+	assert.NilError(t, yaml.Unmarshal(raw, &values))
+	want := ascend.VNPUConfig{
+		ChipName: "Ascend950DT", CommonWord: "Ascend950DT",
+		ResourceName: "huawei.com/Ascend950DT", ResourceMemoryName: "huawei.com/Ascend950DT-memory",
+		MemoryAllocatable: 98304, MemoryCapacity: 98304, AICore: 32,
+	}
+	found := false
+	for _, cfg := range values.Devices.Ascend.Configs {
+		if cfg.ChipName == want.ChipName {
+			assert.DeepEqual(t, cfg, want)
+			found = true
+		}
+	}
+	assert.Assert(t, found, "chart missing Ascend950DT")
+	assert.Assert(t, slices.Contains(values.Devices.Ascend.Resources, want.ResourceName))
+	assert.Assert(t, slices.Contains(values.Devices.Ascend.Resources, want.ResourceMemoryName))
+}
